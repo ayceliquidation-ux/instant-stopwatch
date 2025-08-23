@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Instant Stopwatch – Simple & Free</title>
+  <meta name="description" content="A giant, jitter-free online stopwatch with Start/Stop, Lap, and Reset. Simple, free, and mobile friendly." />
+
+  <!-- Favicon -->
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>⏱️</text></svg>">
+
+  <!-- Social preview (optional: update og:image to your domain later) -->
+  <meta property="og:title" content="Instant Stopwatch – Simple & Free" />
+  <meta property="og:description" content="A giant, jitter-free stopwatch with Start/Stop, Lap, and Reset. Works instantly on any device." />
+  <meta property="og:type" content="website" />
+  <meta property="og:image" content="https://instantstopwatch.com/preview.png" />
+  <meta property="og:url" content="https://instantstopwatch.com/" />
+  <meta name="twitter:card" content="summary_large_image" />
+
+  <style>
+    :root{
+      --bg:#0b0b0c; --panel:#0f1116; --ink:#f5f7fb; --muted:#98a2b3;
+      --ok:#10b981; --danger:#ef4444; --ring:#60a5fa; --accent:#7c5cff;
+    }
+    *{box-sizing:border-box}
+    html,body{height:100%}
+    body{
+      margin:0; background:radial-gradient(1200px 900px at 50% -10%, #171923, var(--bg));
+      color:var(--ink); font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
+      display:grid; grid-template-rows: 1fr auto; place-items:center; padding:24px;
+    }
+
+    .wrap{width:min(1000px, 100%); display:grid; gap:20px;}
+
+    /* TIME DISPLAY */
+    .time{
+      text-align:center; user-select:none; line-height:1.05; font-weight:800;
+      font-size: clamp(48px, 12vw, 120px); text-shadow: 0 10px 40px rgba(0,0,0,.55);
+      font-variant-numeric: tabular-nums lining-nums; letter-spacing:.02em;
+      display:flex; justify-content:center; gap:.25em;
+    }
+    .block, .msblock{ position:relative; display:inline-grid; align-items:baseline; grid-template-areas:"stack"; }
+    .block > .sizer, .msblock > .sizer, #mm, #ss, #ms { grid-area:stack; }
+    .sizer{ visibility:hidden; pointer-events:none; }
+    .msblock{ font-size: clamp(28px, 6vw, 56px); opacity:.9; }
+    .sep{ opacity:.9 }
+
+    /* PANEL */
+    .panel{ background:var(--panel); border:1px solid #1e2233; border-radius:18px; padding:18px; box-shadow:0 10px 30px rgba(0,0,0,.25) }
+
+    /* CONTROLS */
+    .controls{ display:flex; gap:12px; flex-wrap:wrap; justify-content:center; margin-top:18px }
+    button{
+      appearance:none; border:0; cursor:pointer; border-radius:14px; padding:14px 22px; font-weight:800;
+      background:#1f2937; color:var(--ink); font-size: clamp(16px, 3.6vw, 20px);
+      box-shadow:0 6px 20px rgba(0,0,0,.35); transition:transform .08s ease, filter .2s ease, background .2s ease
+    }
+    button:focus-visible{ outline:3px solid var(--ring); outline-offset:3px }
+    button:active{ transform: translateY(1px) }
+    .start{ background: linear-gradient(180deg, #10b981, #059669) }
+    .stop{ background: linear-gradient(180deg, #ef4444, #b91c1c) }
+    .reset{ background:#374151 }
+    .lap{ background: linear-gradient(180deg, #7c5cff, #5b3dff) }
+    .muted{ color:var(--muted); font-size:14px; text-align:center }
+
+    /* LAPS */
+    .laps{ background:var(--panel); border:1px solid #1e2233; border-radius:18px; padding:16px; }
+    table{ width:100%; border-collapse:collapse; font-size:14px }
+    th,td{ padding:10px 12px; border-bottom:1px solid #23263a; text-align:left }
+    th{ color:#cfd3dc; font-weight:800 }
+    .lapnum{ color:#9aa6ff; font-weight:800 }
+    .lapbest{ color:#10b981; font-weight:800 }
+    .lapworst{ color:#ef4444; font-weight:800 }
+    .lap-actions{ display:flex; gap:10px; justify-content:flex-end; margin-top:10px }
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <section class="panel">
+      <div class="time" aria-live="off">
+        <span class="block"><span class="sizer">888</span><span id="mm">000</span></span>
+        <span class="sep">:</span>
+        <span class="block"><span class="sizer">88</span><span id="ss">00</span></span>
+        <span class="sep">.</span>
+        <span class="msblock"><span class="sizer">000</span><span id="ms">000</span></span>
+      </div>
+      <div class="controls">
+        <button id="toggle" class="start">Start</button>
+        <button id="lapBtn" class="lap" disabled>Lap</button>
+        <button id="reset" class="reset">Reset</button>
+      </div>
+      <p class="muted">Space: Start/Stop • L: Lap • R: Reset</p>
+    </section>
+
+    <section class="laps" aria-label="Laps">
+      <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:6px">
+        <h2 style="margin:0; font-size:16px">Laps</h2>
+        <div class="lap-actions">
+          <button id="clearLaps" class="reset" title="Clear laps">Clear Laps</button>
+        </div>
+      </div>
+      <table>
+        <thead>
+          <tr><th>#</th><th>Lap</th><th>Total</th></tr>
+        </thead>
+        <tbody id="lapBody"></tbody>
+      </table>
+    </section>
+  </main>
+
+  <script>
+    let running = false, t0 = 0, acc = 0, raf = 0;
+    const mm = document.getElementById('mm');
+    const ss = document.getElementById('ss');
+    const ms = document.getElementById('ms');
+    const btn = document.getElementById('toggle');
+    const lapBtn = document.getElementById('lapBtn');
+    const resetBtn = document.getElementById('reset');
+    const lapBody = document.getElementById('lapBody');
+    const clearLapsBtn = document.getElementById('clearLaps');
+
+    let lastLapMark = 0;
+    let laps = [];
+
+    function pad2(n){ return n.toString().padStart(2,'0'); }
+    function pad3(n){ return n.toString().padStart(3,'0'); }
+
+    function fmt(msVal){
+      const total = Math.max(0, msVal|0);
+      const m = Math.floor(total / 60000);
+      const s = Math.floor((total % 60000) / 1000);
+      const msr = total % 1000;
+      return `${m.toString().padStart(3,'0')}:${pad2(s)}.${pad3(msr)}`;
+    }
+
+    function render(totalMs){
+      const total = Math.max(0, totalMs|0);
+      const minutes = Math.floor(total / 60000);
+      const seconds = Math.floor((total % 60000) / 1000);
+      const millis  = total % 1000;
+      mm.textContent = minutes.toString().padStart(3,'0');
+      ss.textContent = pad2(seconds);
+      ms.textContent = pad3(millis);
+    }
+
+    function tick(){
+      if(!running) return;
+      const now = performance.now();
+      render(acc + (now - t0));
+      raf = requestAnimationFrame(tick);
+    }
+
+    function start(){
+      if(running) return;
+      running = true; btn.textContent = 'Stop'; btn.classList.remove('start'); btn.classList.add('stop');
+      lapBtn.disabled = false;
+      t0 = performance.now();
+      tick();
+    }
+
+    function stop(){
+      if(!running) return;
+      running = false; cancelAnimationFrame(raf); btn.textContent = 'Start'; btn.classList.remove('stop'); btn.classList.add('start');
+      acc += performance.now() - t0; render(acc);
+      lapBtn.disabled = true;
+    }
+
+    function reset(){
+      running = false; cancelAnimationFrame(raf); acc = 0; render(0);
+      btn.textContent = 'Start'; btn.classList.remove('stop'); btn.classList.add('start');
+      lapBtn.disabled = true;
+      lastLapMark = 0; laps = []; renderLaps();
+    }
+
+    function currentTotal(){
+      return running ? acc + (performance.now() - t0) : acc;
+    }
+
+    function addLap(){
+      const total = currentTotal();
+      const lapTime = total - lastLapMark;
+      lastLapMark = total;
+      laps.unshift({lap: lapTime, total});
+      renderLaps();
+    }
+
+    function renderLaps(){
+      if(laps.length === 0){ lapBody.innerHTML = ''; return; }
+      const lapTimes = laps.map(x=>x.lap);
+      const best = Math.min(...lapTimes);
+      const worst = Math.max(...lapTimes);
+      lapBody.innerHTML = laps.map((r, i)=>{
+        const rank = laps.length - i;
+        const cls = r.lap === best ? 'lapbest' : (r.lap === worst ? 'lapworst' : '');
+        return `<tr>
+          <td class="lapnum">${rank}</td>
+          <td class="${cls}">${fmt(r.lap)}</td>
+          <td>${fmt(r.total)}</td>
+        </tr>`;
+      }).join('');
+    }
+
+    btn.addEventListener('click', ()=> running ? stop() : start());
+    resetBtn.addEventListener('click', reset);
+    lapBtn.addEventListener('click', addLap);
+    clearLapsBtn.addEventListener('click', ()=>{ laps=[]; lastLapMark = currentTotal(); renderLaps(); });
+
+    window.addEventListener('keydown', (e)=>{
+      if(e.code === 'Space'){ e.preventDefault(); running ? stop() : start(); }
+      else if(e.key.toLowerCase() === 'l' && !lapBtn.disabled){ addLap(); }
+      else if(e.key.toLowerCase() === 'r'){ reset(); }
+    });
+
+    render(0);
+  </script>
+</body>
+</html>
