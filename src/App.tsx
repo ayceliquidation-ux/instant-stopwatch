@@ -17,6 +17,7 @@ import {
   Share2,
   Check,
   Bell,
+  ArrowUpRight,
 } from 'lucide-react';
 import Stopwatch from './components/Stopwatch';
 import Timer from './components/Timer';
@@ -28,11 +29,32 @@ import LegalModal from './components/LegalModal';
 import { cn } from './utils';
 import { TimerType } from './types';
 import { soundEngine, AlarmProfile } from './utils/soundEngine';
+import { SEO_ROUTES, findSeoRoute, SeoRouteConfig } from './seoRoutes';
 
 const DEFAULT_TITLE = 'STOPWATCH+ | Online Stopwatch, Timer & Pomodoro Tracker';
+const DEFAULT_DESC =
+  'The most accurate online stopwatch and timer. Features include millisecond precision, lap tracking, Pomodoro focus timer, culinary kitchen timers, and professional productivity tools.';
+
+function updateMetaTags(title: string, description: string, canonicalPath: string) {
+  document.title = title;
+  const descEl = document.querySelector('meta[name="description"]');
+  if (descEl) descEl.setAttribute('content', description);
+  const ogTitle = document.querySelector('meta[property="og:title"]');
+  if (ogTitle) ogTitle.setAttribute('content', title);
+  const ogDesc = document.querySelector('meta[property="og:description"]');
+  if (ogDesc) ogDesc.setAttribute('content', description);
+  const canonicalEl = document.querySelector('link[rel="canonical"]');
+  if (canonicalEl) canonicalEl.setAttribute('href', `https://stopwatchplus.com${canonicalPath}`);
+}
 
 export default function App() {
+  const [activeSeoRoute, setActiveSeoRoute] = useState<SeoRouteConfig | null>(() => {
+    return findSeoRoute(window.location.pathname) || null;
+  });
+
   const [activeTab, setActiveTab] = useState<TimerType>(() => {
+    const seoMatch = findSeoRoute(window.location.pathname);
+    if (seoMatch) return seoMatch.tab;
     const params = new URLSearchParams(window.location.search);
     const urlTab = params.get('tab') as TimerType | null;
     if (urlTab && ['stopwatch', 'timer', 'pomodoro', 'kitchen', 'random'].includes(urlTab)) {
@@ -48,13 +70,17 @@ export default function App() {
   const [copiedUrl, setCopiedUrl] = useState(false);
   const [legalModal, setLegalModal] = useState<'privacy' | 'terms' | 'about' | null>(null);
 
-  // Deep-link / Command timer injection
+  // Deep-link / Command / SEO timer injection
   const [commandTimerSeconds, setCommandTimerSeconds] = useState<number | null>(() => {
+    const seoMatch = findSeoRoute(window.location.pathname);
+    if (seoMatch?.seconds) return seoMatch.seconds;
     const params = new URLSearchParams(window.location.search);
     const dur = params.get('duration');
     return dur ? Number(dur) : null;
   });
   const [commandTimerLabel, setCommandTimerLabel] = useState<string | null>(() => {
+    const seoMatch = findSeoRoute(window.location.pathname);
+    if (seoMatch?.label) return seoMatch.label;
     const params = new URLSearchParams(window.location.search);
     return params.get('label');
   });
@@ -64,16 +90,65 @@ export default function App() {
   const [soundVolume, setSoundVolume] = useState<number>(soundEngine.getVolume());
   const [soundMuted, setSoundMuted] = useState<boolean>(soundEngine.isMuted());
 
+  const navigateToSeoRoute = useCallback((route: SeoRouteConfig, e?: React.MouseEvent) => {
+    if (e) e.preventDefault();
+    window.history.pushState({}, '', route.path);
+    setActiveSeoRoute(route);
+    setActiveTab(route.tab);
+    if (route.seconds) {
+      setCommandTimerSeconds(route.seconds);
+    }
+    setCommandTimerLabel(route.label);
+    updateMetaTags(route.title, route.description, route.path);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }, []);
+
+  useEffect(() => {
+    const seoMatch = findSeoRoute(window.location.pathname);
+    if (seoMatch) {
+      setActiveSeoRoute(seoMatch);
+      updateMetaTags(seoMatch.title, seoMatch.description, seoMatch.path);
+    } else {
+      updateMetaTags(DEFAULT_TITLE, DEFAULT_DESC, '/');
+    }
+
+    const onPopState = () => {
+      const matched = findSeoRoute(window.location.pathname);
+      if (matched) {
+        setActiveSeoRoute(matched);
+        setActiveTab(matched.tab);
+        if (matched.seconds) setCommandTimerSeconds(matched.seconds);
+        setCommandTimerLabel(matched.label);
+        updateMetaTags(matched.title, matched.description, matched.path);
+      } else {
+        setActiveSeoRoute(null);
+        updateMetaTags(DEFAULT_TITLE, DEFAULT_DESC, '/');
+      }
+    };
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, []);
+
   useEffect(() => {
     localStorage.setItem('stopwatch_active_tab', activeTab);
-    const url = new URL(window.location.href);
-    url.searchParams.set('tab', activeTab);
-    window.history.replaceState({}, '', url.toString());
+    const seoMatch = findSeoRoute(window.location.pathname);
+    if (!seoMatch || seoMatch.tab !== activeTab) {
+      const url = new URL(window.location.href);
+      url.pathname = '/';
+      url.searchParams.set('tab', activeTab);
+      window.history.replaceState({}, '', url.toString());
+      setActiveSeoRoute(null);
+    }
   }, [activeTab]);
 
   // Dynamic Browser Tab Title callback
   const handleTitleUpdate = useCallback((customTitle: string | null) => {
-    document.title = customTitle || DEFAULT_TITLE;
+    if (customTitle) {
+      document.title = customTitle;
+    } else {
+      const seoMatch = findSeoRoute(window.location.pathname);
+      document.title = seoMatch ? seoMatch.title : DEFAULT_TITLE;
+    }
   }, []);
 
   // Fullscreen Cinema / Projector Mode toggle (`F` key)
@@ -491,10 +566,15 @@ export default function App() {
               >
                 <span className="absolute -left-[4.5px] top-0 text-[10px] text-[#C8A45D] leading-none">◆</span>
                 
-                <div className="flex items-center space-x-3 mb-3">
+                <div className="flex flex-wrap items-center gap-3 mb-3">
                   <span className="text-[10px] md:text-[11px] uppercase tracking-[0.3em] text-[#C8A45D] font-semibold">
                     {currentTabInfo.microHeading}
                   </span>
+                  {activeSeoRoute && (
+                    <span className="px-2.5 py-0.5 rounded-full bg-[#C8A45D]/15 border border-[#C8A45D]/40 text-[10px] font-mono text-[#E5C687] uppercase tracking-wider">
+                      ◆ {activeSeoRoute.label}
+                    </span>
+                  )}
                 </div>
 
                 <h1 className="font-editorial text-4xl sm:text-5xl md:text-6xl font-normal tracking-tight text-[#F4F1EA] leading-[1.08]">
@@ -505,7 +585,7 @@ export default function App() {
                 </h1>
 
                 <p className="mt-4 text-xs md:text-sm text-[#9E9587] max-w-xl leading-relaxed font-normal">
-                  {currentTabInfo.description}
+                  {activeSeoRoute ? activeSeoRoute.description : currentTabInfo.description}
                 </p>
               </motion.div>
             )}
@@ -613,38 +693,270 @@ export default function App() {
         </nav>
       )}
 
-      {/* Luxury Minimal Footer */}
+      {/* Luxury Programmatic SEO & Omni Suite Network Footer */}
       {!isFullscreen && (
-        <footer className="px-6 md:px-12 py-8 border-t border-[#C8A45D]/10 pb-28 lg:pb-8 max-w-[1600px] mx-auto w-full flex flex-col sm:flex-row items-center justify-between gap-4 text-xs text-[#8A7348]">
-          <div className="flex items-center space-x-3">
-            <span className="text-[#C8A45D]">◆</span>
-            <span className="tracking-[0.2em] uppercase text-[10px]">
-              © 2026 STOPWATCH. HAUTE HORLOGERIE DIGITAL SUITE
-            </span>
+        <footer className="px-6 md:px-12 pt-14 pb-28 lg:pb-12 border-t border-[#C8A45D]/15 bg-[#080706]/90 backdrop-blur-md max-w-[1600px] mx-auto w-full space-y-12 text-xs text-[#8A7348]">
+          {/* 1. Omni Suite Network Showcase */}
+          <div className="space-y-4">
+            <div className="flex items-center space-x-2.5">
+              <span className="text-[#C8A45D]">◆</span>
+              <span className="text-[10px] font-mono uppercase tracking-[0.3em] text-[#E5C687] font-semibold">
+                THE OMNI SUITE NETWORK
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <a
+                href="https://stopwatchplus.com"
+                className="p-5 rounded-2xl glass border border-[#C8A45D]/35 hover:border-[#E5C687] transition-all group flex items-start justify-between"
+              >
+                <div className="space-y-1">
+                  <div className="flex items-center space-x-2">
+                    <span className="font-editorial text-xl font-semibold text-[#F4F1EA] group-hover:text-[#E5C687] transition-colors">
+                      Stopwatch+
+                    </span>
+                    <span className="text-[9px] font-mono uppercase px-2 py-0.5 rounded-full bg-[#C8A45D]/20 text-[#E5C687] border border-[#C8A45D]/30">
+                      ACTIVE
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-[#9E9587] leading-relaxed">
+                    Precision Horology, Millisecond Chronographs, Multi-Timers &amp; Focus Soundscapes.
+                  </p>
+                </div>
+                <ArrowUpRight size={16} className="text-[#C8A45D] shrink-0 group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform" />
+              </a>
+
+              <a
+                href="https://fileomni.com"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="p-5 rounded-2xl glass border border-[#C8A45D]/15 hover:border-[#C8A45D]/60 transition-all group flex items-start justify-between"
+              >
+                <div className="space-y-1">
+                  <div className="flex items-center space-x-2">
+                    <span className="font-editorial text-xl font-semibold text-[#F4F1EA] group-hover:text-[#E5C687] transition-colors">
+                      FileOmni
+                    </span>
+                    <span className="text-[9px] font-mono uppercase px-2 py-0.5 rounded-full bg-white/5 text-[#9E9587] border border-white/10">
+                      LOCAL WASM
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-[#9E9587] leading-relaxed">
+                    100% Local PDF, AI Vision, EXIF Scrubber &amp; Media Workstation — Zero Cloud Uploads.
+                  </p>
+                </div>
+                <ArrowUpRight size={16} className="text-[#C8A45D] shrink-0 group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform" />
+              </a>
+
+              <a
+                href="https://www.holidayomni.com"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="p-5 rounded-2xl glass border border-[#C8A45D]/15 hover:border-[#C8A45D]/60 transition-all group flex items-start justify-between"
+              >
+                <div className="space-y-1">
+                  <div className="flex items-center space-x-2">
+                    <span className="font-editorial text-xl font-semibold text-[#F4F1EA] group-hover:text-[#E5C687] transition-colors">
+                      HolidayOmni
+                    </span>
+                    <span className="text-[9px] font-mono uppercase px-2 py-0.5 rounded-full bg-white/5 text-[#9E9587] border border-white/10">
+                      GLOBAL ALMANAC
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-[#9E9587] leading-relaxed">
+                    Worldwide Public Holiday Countdowns, Cultural Observances &amp; PTO Vacation Optimizer.
+                  </p>
+                </div>
+                <ArrowUpRight size={16} className="text-[#C8A45D] shrink-0 group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform" />
+              </a>
+            </div>
           </div>
 
-          <div className="flex flex-wrap items-center justify-center gap-6">
-            <button 
-              onClick={() => setLegalModal('terms')}
-              className="text-[#9E9587] hover:text-[#E5C687] transition-colors text-[11px] uppercase tracking-[0.15em] flex items-center space-x-1.5 cursor-pointer"
-            >
-              <FileText size={13} className="text-[#C8A45D]" />
-              <span>Terms</span>
-            </button>
-            <button 
-              onClick={() => setLegalModal('privacy')}
-              className="text-[#9E9587] hover:text-[#E5C687] transition-colors text-[11px] uppercase tracking-[0.15em] flex items-center space-x-1.5 cursor-pointer"
-            >
-              <Shield size={13} className="text-[#C8A45D]" />
-              <span>Privacy</span>
-            </button>
-            <button 
-              onClick={() => setLegalModal('about')}
-              className="text-[#9E9587] hover:text-[#E5C687] transition-colors text-[11px] uppercase tracking-[0.15em] flex items-center space-x-1.5 cursor-pointer"
-            >
-              <Info size={13} className="text-[#C8A45D]" />
-              <span>Atelier</span>
-            </button>
+          {/* 2. Programmatic SEO Direct Instrument Directory */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-8 pt-6 border-t border-[#C8A45D]/10">
+            <div>
+              <h4 className="text-[10px] font-mono uppercase tracking-[0.25em] text-[#E5C687] mb-3">
+                PRECISION COUNTDOWNS
+              </h4>
+              <div className="flex flex-wrap gap-1.5">
+                {SEO_ROUTES.filter((r) =>
+                  [
+                    '/30-second-timer',
+                    '/1-minute-timer',
+                    '/2-minute-timer',
+                    '/3-minute-timer',
+                    '/5-minute-timer',
+                    '/10-minute-timer',
+                    '/15-minute-timer',
+                    '/20-minute-timer',
+                    '/25-minute-timer',
+                    '/30-minute-timer',
+                    '/45-minute-timer',
+                    '/60-minute-timer',
+                    '/90-minute-timer',
+                    '/2-hour-timer',
+                  ].includes(r.path)
+                ).map((route) => (
+                  <a
+                    key={route.path}
+                    href={route.path}
+                    onClick={(e) => navigateToSeoRoute(route, e)}
+                    className={cn(
+                      'px-2.5 py-1 rounded-md text-[10px] font-mono border transition-colors',
+                      activeSeoRoute?.path === route.path
+                        ? 'bg-[#C8A45D]/20 border-[#C8A45D] text-[#E5C687]'
+                        : 'bg-[#12100E] border-[#C8A45D]/15 text-[#9E9587] hover:text-[#E5C687] hover:border-[#C8A45D]/40'
+                    )}
+                  >
+                    {route.label.replace(' Timer', '')}
+                  </a>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <h4 className="text-[10px] font-mono uppercase tracking-[0.25em] text-[#E5C687] mb-3">
+                CULINARY &amp; BARISTA LAB
+              </h4>
+              <div className="flex flex-wrap gap-1.5">
+                {SEO_ROUTES.filter((r) =>
+                  [
+                    '/soft-boiled-egg-timer',
+                    '/jammy-egg-timer',
+                    '/hard-boiled-egg-timer',
+                    '/poached-egg-timer',
+                    '/steak-sear-timer',
+                    '/air-fryer-timer',
+                    '/pour-over-coffee-timer',
+                    '/french-press-timer',
+                    '/tea-steep-timer',
+                    '/pizza-oven-timer',
+                    '/pasta-al-dente-timer',
+                    '/sourdough-proof-timer',
+                  ].includes(r.path)
+                ).map((route) => (
+                  <a
+                    key={route.path}
+                    href={route.path}
+                    onClick={(e) => navigateToSeoRoute(route, e)}
+                    className={cn(
+                      'px-2.5 py-1 rounded-md text-[10px] font-mono border transition-colors',
+                      activeSeoRoute?.path === route.path
+                        ? 'bg-[#C8A45D]/20 border-[#C8A45D] text-[#E5C687]'
+                        : 'bg-[#12100E] border-[#C8A45D]/15 text-[#9E9587] hover:text-[#E5C687] hover:border-[#C8A45D]/40'
+                    )}
+                  >
+                    {route.label.replace(' Timer', '')}
+                  </a>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <h4 className="text-[10px] font-mono uppercase tracking-[0.25em] text-[#E5C687] mb-3">
+                ATHLETIC, FOCUS &amp; BREATH
+              </h4>
+              <div className="flex flex-wrap gap-1.5">
+                {SEO_ROUTES.filter((r) =>
+                  [
+                    '/tabata-timer',
+                    '/hiit-timer',
+                    '/interval-timer',
+                    '/emom-timer',
+                    '/plank-timer',
+                    '/pomodoro-timer',
+                    '/study-timer',
+                    '/box-breathing-timer',
+                    '/4-7-8-breathing-timer',
+                    '/meditation-timer',
+                    '/classroom-timer',
+                    '/presentation-timer',
+                  ].includes(r.path)
+                ).map((route) => (
+                  <a
+                    key={route.path}
+                    href={route.path}
+                    onClick={(e) => navigateToSeoRoute(route, e)}
+                    className={cn(
+                      'px-2.5 py-1 rounded-md text-[10px] font-mono border transition-colors',
+                      activeSeoRoute?.path === route.path
+                        ? 'bg-[#C8A45D]/20 border-[#C8A45D] text-[#E5C687]'
+                        : 'bg-[#12100E] border-[#C8A45D]/15 text-[#9E9587] hover:text-[#E5C687] hover:border-[#C8A45D]/40'
+                    )}
+                  >
+                    {route.label.replace(' Timer', '')}
+                  </a>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <h4 className="text-[10px] font-mono uppercase tracking-[0.25em] text-[#E5C687] mb-3">
+                CORE HOROLOGY &amp; DECISION
+              </h4>
+              <div className="flex flex-wrap gap-1.5">
+                {SEO_ROUTES.filter((r) =>
+                  [
+                    '/stopwatch',
+                    '/timer',
+                    '/kitchen-timer',
+                    '/chess-clock',
+                    '/random-tools',
+                    '/wheel-spinner',
+                    '/dice-roller',
+                    '/coin-flip',
+                  ].includes(r.path)
+                ).map((route) => (
+                  <a
+                    key={route.path}
+                    href={route.path}
+                    onClick={(e) => navigateToSeoRoute(route, e)}
+                    className={cn(
+                      'px-2.5 py-1 rounded-md text-[10px] font-mono border transition-colors',
+                      activeSeoRoute?.path === route.path
+                        ? 'bg-[#C8A45D]/20 border-[#C8A45D] text-[#E5C687]'
+                        : 'bg-[#12100E] border-[#C8A45D]/15 text-[#9E9587] hover:text-[#E5C687] hover:border-[#C8A45D]/40'
+                    )}
+                  >
+                    {route.label}
+                  </a>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* 3. Bottom Bar */}
+          <div className="pt-6 border-t border-[#C8A45D]/10 flex flex-col sm:flex-row items-center justify-between gap-4">
+            <div className="flex items-center space-x-3">
+              <span className="text-[#C8A45D]">◆</span>
+              <span className="tracking-[0.2em] uppercase text-[10px]">
+                © 2026 STOPWATCH. HAUTE HORLOGERIE DIGITAL SUITE
+              </span>
+            </div>
+
+            <div className="flex flex-wrap items-center justify-center gap-6">
+              <button 
+                onClick={() => setLegalModal('terms')}
+                className="text-[#9E9587] hover:text-[#E5C687] transition-colors text-[11px] uppercase tracking-[0.15em] flex items-center space-x-1.5 cursor-pointer"
+              >
+                <FileText size={13} className="text-[#C8A45D]" />
+                <span>Terms</span>
+              </button>
+              <button 
+                onClick={() => setLegalModal('privacy')}
+                className="text-[#9E9587] hover:text-[#E5C687] transition-colors text-[11px] uppercase tracking-[0.15em] flex items-center space-x-1.5 cursor-pointer"
+              >
+                <Shield size={13} className="text-[#C8A45D]" />
+                <span>Privacy</span>
+              </button>
+              <button 
+                onClick={() => setLegalModal('about')}
+                className="text-[#9E9587] hover:text-[#E5C687] transition-colors text-[11px] uppercase tracking-[0.15em] flex items-center space-x-1.5 cursor-pointer"
+              >
+                <Info size={13} className="text-[#C8A45D]" />
+                <span>Atelier</span>
+              </button>
+            </div>
           </div>
         </footer>
       )}
