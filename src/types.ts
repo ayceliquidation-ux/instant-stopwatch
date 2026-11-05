@@ -4,6 +4,7 @@ export interface Lap {
   id: string;
   time: number;
   overallTime: number;
+  label?: string;
 }
 
 export interface TimerPreset {

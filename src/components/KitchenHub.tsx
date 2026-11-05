@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Egg, Flame, Utensils, Coffee, Play, Pause, RotateCcw, Trash2, Thermometer, Plus } from 'lucide-react';
 import { formatTimer, cn } from '../utils';
+import { soundEngine } from '../utils/soundEngine';
 
 type CulinaryCategory = 'eggs' | 'steak' | 'pasta' | 'tea';
 
@@ -12,6 +13,7 @@ interface ActiveKitchenTimer {
   totalSeconds: number;
   secondsLeft: number;
   isRunning: boolean;
+  endTimestamp?: number | null;
   restSeconds?: number;
   inRestPhase?: boolean;
 }
@@ -50,7 +52,11 @@ const TEA_PRESETS = [
   { id: 'herbal', label: 'Chamomile & Verbena', temp: '100°C / 212°F', subtitle: 'Full botanical tisane extraction', seconds: 330 },
 ];
 
-export default function KitchenHub() {
+interface KitchenHubProps {
+  onTitleUpdate?: (title: string | null) => void;
+}
+
+export default function KitchenHub({ onTitleUpdate }: KitchenHubProps) {
   const [category, setCategory] = useState<CulinaryCategory>('eggs');
   const [thicknessIdx, setThicknessIdx] = useState(0);
   const [donenessIdx, setDonenessIdx] = useState(1);
@@ -81,12 +87,16 @@ export default function KitchenHub() {
       setTimers((prev) =>
         prev.map((t) => {
           if (!t.isRunning) return t;
-          if (t.secondsLeft > 1) {
-            return { ...t, secondsLeft: t.secondsLeft - 1 };
+          const now = Date.now();
+          const target = t.endTimestamp || now + t.secondsLeft * 1000;
+          const remSec = Math.ceil((target - now) / 1000);
+
+          if (remSec > 0) {
+            return { ...t, secondsLeft: remSec, endTimestamp: target };
           }
-          // Timer reached 0
-          const audio = new Audio('https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3');
-          audio.play().catch(() => {});
+
+          soundEngine.playAlarm();
+          soundEngine.notify('Culinary Timer Complete', `${t.title} is ready!`);
 
           if (t.restSeconds && !t.inRestPhase) {
             return {
@@ -94,24 +104,37 @@ export default function KitchenHub() {
               inRestPhase: true,
               totalSeconds: t.restSeconds,
               secondsLeft: t.restSeconds,
+              endTimestamp: Date.now() + t.restSeconds * 1000,
               subtitle: 'Resting Phase — Tent loosely with foil',
               isRunning: true,
             };
           }
-          return { ...t, secondsLeft: 0, isRunning: false };
+          return { ...t, secondsLeft: 0, isRunning: false, endTimestamp: null };
         })
       );
-    }, 1000);
+    }, 250);
     return () => clearInterval(interval);
   }, []);
 
+  useEffect(() => {
+    const runningTimers = timers.filter((t) => t.isRunning);
+    if (runningTimers.length > 0) {
+      const urgent = runningTimers.reduce((a, b) => (a.secondsLeft <= b.secondsLeft ? a : b));
+      onTitleUpdate?.(`[${formatTimer(urgent.secondsLeft)}] ${urgent.title} — Stopwatch+`);
+    } else {
+      onTitleUpdate?.(null);
+    }
+  }, [timers, onTitleUpdate]);
+
   const addKitchenTimer = (title: string, subtitle: string, seconds: number, restSeconds?: number) => {
+    soundEngine.playClick();
     const newTimer: ActiveKitchenTimer = {
       id: Math.random().toString(36).substring(2, 9),
       title,
       subtitle,
       totalSeconds: seconds,
       secondsLeft: seconds,
+      endTimestamp: Date.now() + seconds * 1000,
       isRunning: true,
       restSeconds,
       inRestPhase: false,
@@ -120,15 +143,27 @@ export default function KitchenHub() {
   };
 
   const toggleTimer = (id: string) => {
+    soundEngine.playClick();
     setTimers((prev) =>
-      prev.map((t) => (t.id === id && t.secondsLeft > 0 ? { ...t, isRunning: !t.isRunning } : t))
+      prev.map((t) => {
+        if (t.id !== id || t.secondsLeft <= 0) return t;
+        const nextRun = !t.isRunning;
+        return {
+          ...t,
+          isRunning: nextRun,
+          endTimestamp: nextRun ? Date.now() + t.secondsLeft * 1000 : null,
+        };
+      })
     );
   };
 
   const resetTimer = (id: string) => {
+    soundEngine.playClick();
     setTimers((prev) =>
       prev.map((t) =>
-        t.id === id ? { ...t, isRunning: false, secondsLeft: t.totalSeconds, inRestPhase: false } : t
+        t.id === id
+          ? { ...t, isRunning: false, secondsLeft: t.totalSeconds, endTimestamp: null, inRestPhase: false }
+          : t
       )
     );
   };
@@ -154,7 +189,6 @@ export default function KitchenHub() {
     <div className="grid grid-cols-1 lg:grid-cols-12 gap-10 items-start w-full">
       {/* Left Column: Culinary Selector & Presets */}
       <div className="lg:col-span-6 space-y-6">
-        {/* Category Tabs */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 p-1.5 rounded-2xl glass border border-[#C8A45D]/20">
           {categories.map((cat) => {
             const active = category === cat.id;
@@ -176,7 +210,6 @@ export default function KitchenHub() {
           })}
         </div>
 
-        {/* Category Details Card */}
         <div className="glass rounded-2xl p-6 neo-shadow border border-[#C8A45D]/20">
           {category === 'eggs' && (
             <div className="space-y-4">
@@ -220,7 +253,6 @@ export default function KitchenHub() {
                 <span className="text-[10px] font-mono uppercase tracking-[0.25em] text-[#C8A45D]">AUTO-REST PHASE</span>
               </div>
 
-              {/* Thickness Selector */}
               <div className="space-y-2">
                 <label className="text-[10px] uppercase tracking-[0.25em] text-[#8A7348] font-semibold">
                   1. Cut Thickness
@@ -243,7 +275,6 @@ export default function KitchenHub() {
                 </div>
               </div>
 
-              {/* Doneness Selector */}
               <div className="space-y-2">
                 <label className="text-[10px] uppercase tracking-[0.25em] text-[#8A7348] font-semibold">
                   2. Target Doneness & Core Temp
@@ -267,7 +298,6 @@ export default function KitchenHub() {
                 </div>
               </div>
 
-              {/* Summary & Launch */}
               <div className="p-4 rounded-xl bg-[#0A0908]/90 border border-[#C8A45D]/25 flex flex-col sm:flex-row items-center justify-between gap-4">
                 <div>
                   <div className="text-xs font-semibold uppercase tracking-[0.2em] text-[#E5C687]">
@@ -395,7 +425,6 @@ export default function KitchenHub() {
                     exit={{ opacity: 0, scale: 0.95 }}
                     className="p-5 rounded-2xl bg-[#12100E]/90 border border-[#C8A45D]/25 flex items-center justify-between gap-4"
                   >
-                    {/* Mini Champagne Gold Circular Ring */}
                     <div className="relative w-16 h-16 shrink-0 flex items-center justify-center">
                       <svg className="absolute inset-0 w-full h-full -rotate-90" viewBox="0 0 100 100">
                         <circle
@@ -423,7 +452,6 @@ export default function KitchenHub() {
                       </span>
                     </div>
 
-                    {/* Timer Info */}
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center space-x-2">
                         <h4 className="text-sm font-semibold text-[#F4F1EA] truncate">{t.title}</h4>
@@ -439,7 +467,6 @@ export default function KitchenHub() {
                       </div>
                     </div>
 
-                    {/* Actions */}
                     <div className="flex items-center space-x-2 shrink-0">
                       <button
                         onClick={() => toggleTimer(t.id)}

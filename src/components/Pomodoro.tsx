@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { motion } from 'motion/react';
-import { RotateCcw, Coffee, Brain } from 'lucide-react';
+import { RotateCcw, Coffee, Brain, Volume2, Plus, Trash2, CheckSquare, Square } from 'lucide-react';
 import { formatTimer, cn } from '../utils';
+import { soundEngine, AmbientProfile } from '../utils/soundEngine';
 
 type PomodoroMode = 'work' | 'shortBreak' | 'longBreak';
 
@@ -11,7 +12,19 @@ const MODES: Record<PomodoroMode, { label: string; subtitle: string; seconds: nu
   longBreak: { label: 'GRAND INTERMISSION', subtitle: '15 Minute Restoration', seconds: 900 },
 };
 
-export default function Pomodoro() {
+interface FocusTask {
+  id: string;
+  title: string;
+  estPomodoros: number;
+  completedPomodoros: number;
+  done: boolean;
+}
+
+interface PomodoroProps {
+  onTitleUpdate?: (title: string | null) => void;
+}
+
+export default function Pomodoro({ onTitleUpdate }: PomodoroProps) {
   const [mode, setMode] = useState<PomodoroMode>('work');
   const [secondsLeft, setSecondsLeft] = useState(MODES.work.seconds);
   const [isRunning, setIsRunning] = useState(false);
@@ -19,53 +32,151 @@ export default function Pomodoro() {
     const saved = localStorage.getItem('pomodoro_sessions');
     return saved ? Number(saved) : 0;
   });
-  const timerRef = useRef<number | null>(null);
+
+  // Procedural Ambient Audio State
+  const [ambient, setAmbient] = useState<AmbientProfile>('none');
+  const [ambientVol, setAmbientVol] = useState<number>(0.35);
+
+  // Integrated Pomofocus-killer Task Queue
+  const [tasks, setTasks] = useState<FocusTask[]>(() => {
+    try {
+      const saved = localStorage.getItem('pomodoro_tasks');
+      if (saved) return JSON.parse(saved);
+    } catch {}
+    return [
+      { id: 't1', title: 'Deep architecture & implementation review', estPomodoros: 2, completedPomodoros: 0, done: false },
+    ];
+  });
+  const [newTaskTitle, setNewTaskTitle] = useState('');
+
+  const endTimestampRef = useRef<number | null>(null);
 
   useEffect(() => {
     localStorage.setItem('pomodoro_sessions', String(sessions));
   }, [sessions]);
 
   useEffect(() => {
-    if (isRunning && secondsLeft > 0) {
-      timerRef.current = window.setInterval(() => {
-        setSecondsLeft((prev) => prev - 1);
-      }, 1000);
-    } else if (secondsLeft === 0 && isRunning) {
+    localStorage.setItem('pomodoro_tasks', JSON.stringify(tasks));
+  }, [tasks]);
+
+  useEffect(() => {
+    return () => {
+      soundEngine.stopAmbient();
+    };
+  }, []);
+
+  // Zero-Drift Date.now() delta timer
+  useEffect(() => {
+    if (!isRunning) {
+      endTimestampRef.current = null;
+      return;
+    }
+
+    if (!endTimestampRef.current) {
+      endTimestampRef.current = Date.now() + secondsLeft * 1000;
+    }
+
+    const interval = window.setInterval(() => {
+      if (!endTimestampRef.current) return;
+      const remMs = endTimestampRef.current - Date.now();
+      if (remMs > 0) {
+        setSecondsLeft(Math.ceil(remMs / 1000));
+        return;
+      }
+
+      // Cycle Complete
       setIsRunning(false);
-      if (timerRef.current) clearInterval(timerRef.current);
-      
+      endTimestampRef.current = null;
+      soundEngine.playAlarm();
+
       if (mode === 'work') {
         const nextSessionCount = sessions + 1;
         setSessions(nextSessionCount);
+        setTasks((prev) => {
+          const activeIdx = prev.findIndex((t) => !t.done);
+          if (activeIdx === -1) return prev;
+          return prev.map((t, idx) =>
+            idx === activeIdx ? { ...t, completedPomodoros: t.completedPomodoros + 1 } : t
+          );
+        });
         const nextMode = nextSessionCount % 4 === 0 ? 'longBreak' : 'shortBreak';
         setMode(nextMode);
         setSecondsLeft(MODES[nextMode].seconds);
+        soundEngine.notify('Focus Cycle Complete', `Time for ${MODES[nextMode].label}.`);
       } else {
         setMode('work');
         setSecondsLeft(MODES.work.seconds);
+        soundEngine.notify('Break Complete', 'Ready for your next 25-minute Deep Focus session.');
       }
-      
-      const audio = new Audio('https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3');
-      audio.play().catch(() => {});
-    } else {
-      if (timerRef.current) clearInterval(timerRef.current);
-    }
-    return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
-    };
-  }, [isRunning, secondsLeft, mode, sessions]);
+    }, 250);
 
-  const handleStartPause = useCallback(() => setIsRunning((prev) => !prev), []);
+    return () => clearInterval(interval);
+  }, [isRunning, mode, sessions, secondsLeft]);
+
+  useEffect(() => {
+    if (isRunning) {
+      onTitleUpdate?.(`[${formatTimer(secondsLeft)}] ${MODES[mode].label} — Stopwatch+`);
+    } else {
+      onTitleUpdate?.(null);
+    }
+  }, [isRunning, secondsLeft, mode, onTitleUpdate]);
+
+  const handleStartPause = useCallback(() => {
+    soundEngine.playClick();
+    setIsRunning((prev) => {
+      const next = !prev;
+      if (next) {
+        endTimestampRef.current = Date.now() + secondsLeft * 1000;
+      } else {
+        endTimestampRef.current = null;
+      }
+      return next;
+    });
+  }, [secondsLeft]);
 
   const handleReset = useCallback(() => {
+    soundEngine.playClick();
     setIsRunning(false);
+    endTimestampRef.current = null;
     setSecondsLeft(MODES[mode].seconds);
-  }, [mode]);
+    onTitleUpdate?.(null);
+  }, [mode, onTitleUpdate]);
 
   const switchMode = (newMode: PomodoroMode) => {
+    soundEngine.playClick();
     setIsRunning(false);
+    endTimestampRef.current = null;
     setMode(newMode);
     setSecondsLeft(MODES[newMode].seconds);
+  };
+
+  const handleAmbientChange = (prof: AmbientProfile) => {
+    setAmbient(prof);
+    soundEngine.setAmbient(prof, ambientVol);
+  };
+
+  const addTask = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newTaskTitle.trim()) return;
+    setTasks((prev) => [
+      ...prev,
+      {
+        id: Math.random().toString(36).substring(2, 9),
+        title: newTaskTitle.trim(),
+        estPomodoros: 1,
+        completedPomodoros: 0,
+        done: false,
+      },
+    ]);
+    setNewTaskTitle('');
+  };
+
+  const toggleTask = (id: string) => {
+    setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, done: !t.done } : t)));
+  };
+
+  const removeTask = (id: string) => {
+    setTasks((prev) => prev.filter((t) => t.id !== id));
   };
 
   useEffect(() => {
@@ -91,13 +202,13 @@ export default function Pomodoro() {
   const progress = ((MODES[mode].seconds - secondsLeft) / MODES[mode].seconds) * 100;
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-12 gap-10 items-center w-full">
-      {/* Left/Center Focus Dial */}
-      <div className="lg:col-span-7 flex flex-col items-center lg:items-start space-y-10">
-        <div className="relative flex items-center justify-center p-4">
+    <div className="grid grid-cols-1 lg:grid-cols-12 gap-10 items-start w-full">
+      {/* Left/Center Focus Dial & Ambient Soundscape Studio */}
+      <div className="lg:col-span-6 flex flex-col items-center lg:items-start space-y-8">
+        <div className="relative flex items-center justify-center p-2">
           <div className="absolute inset-0 rounded-full bg-[#C8A45D]/[0.06] blur-[75px] pointer-events-none" />
           
-          <div className="relative w-72 h-72 sm:w-88 sm:h-88 md:w-96 md:h-96 rounded-full glass neo-shadow flex flex-col items-center justify-center overflow-hidden">
+          <div className="relative w-72 h-72 sm:w-88 sm:h-88 rounded-full glass neo-shadow flex flex-col items-center justify-center overflow-hidden">
             <div 
               className="absolute inset-0 bg-center bg-cover opacity-[0.12] mix-blend-screen pointer-events-none"
               style={{ backgroundImage: `url('/emblem.jpg')` }}
@@ -117,7 +228,7 @@ export default function Pomodoro() {
                 strokeDasharray="298.45"
                 initial={{ strokeDashoffset: 298.45 }}
                 animate={{ strokeDashoffset: 298.45 - (298.45 * progress) / 100 }}
-                transition={{ duration: 0.5, ease: "linear" }}
+                transition={{ duration: 0.3, ease: "linear" }}
               />
             </svg>
 
@@ -128,12 +239,9 @@ export default function Pomodoro() {
               <span className="text-[9px] uppercase tracking-[0.35em] text-[#C8A45D] font-semibold mb-2">
                 {MODES[mode].label}
               </span>
-              <motion.span 
-                key={secondsLeft}
-                className="text-5xl sm:text-6xl md:text-7xl font-mono font-light tracking-tight tabular-nums text-[#F4F1EA] gold-text-glow"
-              >
+              <span className="text-5xl sm:text-6xl md:text-7xl font-mono font-light tracking-tight tabular-nums text-[#F4F1EA] gold-text-glow">
                 {formatTimer(secondsLeft)}
-              </motion.span>
+              </span>
 
               {/* 4-Cycle Diamond Indicators */}
               <div className="mt-6 flex items-center space-x-3">
@@ -180,12 +288,60 @@ export default function Pomodoro() {
             <span className="text-xs font-semibold uppercase tracking-[0.2em]">RESET</span>
           </motion.button>
         </div>
+
+        {/* Procedural Web Audio Focus Soundscape Mixer */}
+        <div className="w-full glass rounded-2xl p-5 border border-[#C8A45D]/20 space-y-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center space-x-2">
+              <Volume2 size={15} className="text-[#C8A45D]" />
+              <span className="text-[10px] font-mono uppercase tracking-[0.25em] text-[#E5C687]">
+                PROCEDURAL FOCUS SOUNDSCAPE SYNTHESIZER
+              </span>
+            </div>
+            <input
+              type="range"
+              min={0}
+              max={1}
+              step={0.05}
+              value={ambientVol}
+              onChange={(e) => {
+                const v = Number(e.target.value);
+                setAmbientVol(v);
+                soundEngine.setAmbient(ambient, v);
+              }}
+              className="w-24 accent-[#C8A45D] cursor-pointer"
+              title="Ambient Volume"
+            />
+          </div>
+
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+            {[
+              { id: 'none' as const, label: 'SILENCE' },
+              { id: 'brown' as const, label: 'BROWN NOISE' },
+              { id: 'rain' as const, label: 'PINK RAIN' },
+              { id: 'gamma' as const, label: '40Hz GAMMA' },
+            ].map((item) => (
+              <button
+                key={item.id}
+                onClick={() => handleAmbientChange(item.id)}
+                className={cn(
+                  "py-2.5 px-3 rounded-xl text-[10px] font-mono uppercase tracking-wider border transition-all cursor-pointer",
+                  ambient === item.id
+                    ? "bg-[#C8A45D] text-[#0A0908] border-[#E5C687] font-bold"
+                    : "bg-[#12100E] text-[#9E9587] border-[#C8A45D]/20 hover:text-[#F4F1EA]"
+                )}
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
+        </div>
       </div>
 
-      {/* Right Column: Cadence Selector */}
-      <div className="lg:col-span-5 w-full">
-        <div className="glass rounded-2xl p-6 neo-shadow border border-[#C8A45D]/20 space-y-5">
-          <div className="flex items-center justify-between pb-4 border-b border-[#C8A45D]/15">
+      {/* Right Column: Cadence Selector & Focus Task Queue */}
+      <div className="lg:col-span-6 w-full space-y-6">
+        <div className="glass rounded-2xl p-6 neo-shadow border border-[#C8A45D]/20 space-y-4">
+          <div className="flex items-center justify-between pb-3 border-b border-[#C8A45D]/15">
             <div className="flex items-center space-x-2">
               <span className="text-[#C8A45D] text-xs">◆</span>
               <h3 className="font-editorial text-xl text-[#F4F1EA] tracking-wide">
@@ -193,11 +349,11 @@ export default function Pomodoro() {
               </h3>
             </div>
             <span className="text-[10px] font-mono uppercase tracking-[0.25em] text-[#E5C687]">
-              {sessions} COMPLETED
+              {sessions} POMODOROS COMPLETED
             </span>
           </div>
 
-          <div className="space-y-3">
+          <div className="grid grid-cols-3 gap-2.5">
             {(Object.keys(MODES) as PomodoroMode[]).map((m) => {
               const active = mode === m;
               return (
@@ -205,29 +361,92 @@ export default function Pomodoro() {
                   key={m}
                   onClick={() => switchMode(m)}
                   className={cn(
-                    "w-full p-4 rounded-xl border text-left transition-all flex items-center justify-between cursor-pointer",
+                    "p-3.5 rounded-xl border text-left transition-all cursor-pointer",
                     active
-                      ? "bg-[#C8A45D]/15 border-[#C8A45D] text-[#F4F1EA] accent-glow"
-                      : "bg-[#12100E]/70 border-[#C8A45D]/15 text-[#9E9587] hover:border-[#C8A45D]/40 hover:text-[#F4F1EA]"
+                      ? "bg-[#C8A45D]/20 border-[#C8A45D] text-[#F4F1EA]"
+                      : "bg-[#12100E]/70 border-[#C8A45D]/15 text-[#9E9587] hover:text-[#F4F1EA]"
                   )}
                 >
-                  <div>
-                    <div className="flex items-center space-x-2">
-                      <span className="text-[#C8A45D] text-xs">{active ? '◆' : '◇'}</span>
-                      <span className="text-xs font-semibold uppercase tracking-[0.22em] text-[#E5C687]">
-                        {MODES[m].label}
-                      </span>
-                    </div>
-                    <p className="text-xs text-[#9E9587] mt-1 pl-4">
-                      {MODES[m].subtitle}
-                    </p>
+                  <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[#E5C687]">
+                    {MODES[m].label}
                   </div>
-                  <span className="font-mono text-sm text-[#F4F1EA]">
+                  <div className="font-mono text-sm text-[#F4F1EA] mt-1">
                     {Math.floor(MODES[m].seconds / 60)}:00
-                  </span>
+                  </div>
                 </button>
               );
             })}
+          </div>
+        </div>
+
+        {/* Executive Focus Ledger (Tasks) */}
+        <div className="glass rounded-2xl p-6 neo-shadow border border-[#C8A45D]/20 space-y-4">
+          <div className="flex items-center justify-between pb-3 border-b border-[#C8A45D]/15">
+            <div className="flex items-center space-x-2">
+              <span className="text-[#C8A45D] text-xs">◆</span>
+              <h3 className="font-editorial text-xl text-[#F4F1EA] tracking-wide">
+                Executive Focus Ledger
+              </h3>
+            </div>
+            <span className="text-[10px] font-mono uppercase tracking-[0.2em] text-[#8A7348]">
+              {tasks.filter((t) => t.done).length}/{tasks.length} COMPLETE
+            </span>
+          </div>
+
+          <form onSubmit={addTask} className="flex gap-2">
+            <input
+              type="text"
+              value={newTaskTitle}
+              onChange={(e) => setNewTaskTitle(e.target.value)}
+              placeholder="Inscribe focus objective..."
+              className="flex-1 bg-[#0A0908] border border-[#C8A45D]/25 rounded-xl px-4 py-2.5 text-xs text-[#F4F1EA] placeholder-[#8A7348]/60 focus:outline-none focus:border-[#C8A45D]"
+            />
+            <button
+              type="submit"
+              className="btn-chamfer px-4 py-2.5 text-[10px] font-semibold uppercase tracking-wider text-[#E5C687] flex items-center space-x-1 cursor-pointer"
+            >
+              <Plus size={13} />
+              <span>ADD</span>
+            </button>
+          </form>
+
+          <div className="space-y-2 max-h-52 overflow-y-auto custom-scrollbar pr-1">
+            {tasks.map((t) => (
+              <div
+                key={t.id}
+                className="flex items-center justify-between p-3 rounded-xl bg-[#12100E]/80 border border-[#C8A45D]/15"
+              >
+                <button
+                  onClick={() => toggleTask(t.id)}
+                  className="flex items-center space-x-3 text-left flex-1 min-w-0 cursor-pointer"
+                >
+                  {t.done ? (
+                    <CheckSquare size={15} className="text-[#C8A45D] shrink-0" />
+                  ) : (
+                    <Square size={15} className="text-[#8A7348] shrink-0" />
+                  )}
+                  <span
+                    className={cn(
+                      "text-xs truncate",
+                      t.done ? "line-through text-[#8A7348]" : "text-[#F4F1EA]"
+                    )}
+                  >
+                    {t.title}
+                  </span>
+                </button>
+                <div className="flex items-center space-x-3 ml-2 shrink-0">
+                  <span className="text-[10px] font-mono text-[#E5C687]">
+                    {t.completedPomodoros}/{t.estPomodoros} ◆
+                  </span>
+                  <button
+                    onClick={() => removeTask(t.id)}
+                    className="text-[#8A7348] hover:text-red-400 cursor-pointer"
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                </div>
+              </div>
+            ))}
           </div>
         </div>
       </div>

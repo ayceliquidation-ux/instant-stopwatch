@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { motion } from 'motion/react';
-import { RotateCcw, Bell, BellOff } from 'lucide-react';
+import { RotateCcw, Share2, Check } from 'lucide-react';
 import { formatTimer, cn } from '../utils';
+import { soundEngine } from '../utils/soundEngine';
 
 const PRESETS = [
   { label: '1 MIN', seconds: 60 },
@@ -16,10 +17,17 @@ const PRESETS = [
 
 interface TimerProps {
   externalSeconds?: number | null;
+  externalLabel?: string | null;
   onClearExternalSeconds?: () => void;
+  onTitleUpdate?: (title: string | null) => void;
 }
 
-export default function Timer({ externalSeconds, onClearExternalSeconds }: TimerProps) {
+export default function Timer({
+  externalSeconds,
+  externalLabel,
+  onClearExternalSeconds,
+  onTitleUpdate,
+}: TimerProps) {
   const [initialSeconds, setInitialSeconds] = useState<number>(() => {
     const saved = localStorage.getItem('timer_initial_seconds');
     return saved ? Number(saved) : 300;
@@ -28,60 +36,100 @@ export default function Timer({ externalSeconds, onClearExternalSeconds }: Timer
     const saved = localStorage.getItem('timer_seconds_left');
     return saved ? Number(saved) : 300;
   });
+  const [timerLabel, setTimerLabel] = useState<string>(() => {
+    return localStorage.getItem('timer_label') || 'Countdown';
+  });
   const [isRunning, setIsRunning] = useState(false);
-  const [isMuted, setIsMuted] = useState(false);
   const [customMinutes, setCustomMinutes] = useState('');
   const [customSecs, setCustomSecs] = useState('');
-  const timerRef = useRef<number | null>(null);
+  const [copiedLink, setCopiedLink] = useState(false);
+
+  const endTimestampRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (externalSeconds && externalSeconds > 0) {
       setInitialSeconds(externalSeconds);
       setSecondsLeft(externalSeconds);
+      if (externalLabel) setTimerLabel(externalLabel);
+      endTimestampRef.current = Date.now() + externalSeconds * 1000;
       setIsRunning(true);
       onClearExternalSeconds?.();
     }
-  }, [externalSeconds, onClearExternalSeconds]);
+  }, [externalSeconds, externalLabel, onClearExternalSeconds]);
 
   useEffect(() => {
     localStorage.setItem('timer_initial_seconds', String(initialSeconds));
     localStorage.setItem('timer_seconds_left', String(secondsLeft));
-  }, [initialSeconds, secondsLeft]);
+    localStorage.setItem('timer_label', timerLabel);
+  }, [initialSeconds, secondsLeft, timerLabel]);
+
+  // Zero-Drift Date.now() delta countdown
+  useEffect(() => {
+    if (!isRunning) {
+      endTimestampRef.current = null;
+      return;
+    }
+
+    if (!endTimestampRef.current) {
+      endTimestampRef.current = Date.now() + secondsLeft * 1000;
+    }
+
+    const interval = window.setInterval(() => {
+      if (!endTimestampRef.current) return;
+      const remainingMs = endTimestampRef.current - Date.now();
+      if (remainingMs <= 0) {
+        setSecondsLeft(0);
+        setIsRunning(false);
+        endTimestampRef.current = null;
+        soundEngine.playAlarm();
+        soundEngine.notify('Timer Complete — Stopwatch+', `${timerLabel} (${formatTimer(initialSeconds)}) has finished.`);
+      } else {
+        setSecondsLeft(Math.ceil(remainingMs / 1000));
+      }
+    }, 200);
+
+    return () => clearInterval(interval);
+  }, [isRunning, initialSeconds, timerLabel]);
 
   useEffect(() => {
-    if (isRunning && secondsLeft > 0) {
-      timerRef.current = window.setInterval(() => {
-        setSecondsLeft((prev) => prev - 1);
-      }, 1000);
-    } else if (secondsLeft === 0 && isRunning) {
-      setIsRunning(false);
-      if (timerRef.current) clearInterval(timerRef.current);
-      if (!isMuted) {
-        const audio = new Audio('https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3');
-        audio.play().catch(() => {});
-      }
+    if (isRunning) {
+      onTitleUpdate?.(`[${formatTimer(secondsLeft)}] ${timerLabel} — Stopwatch+`);
+    } else if (secondsLeft === 0) {
+      onTitleUpdate?.(`[00:00 DONE] ${timerLabel} — Stopwatch+`);
     } else {
-      if (timerRef.current) clearInterval(timerRef.current);
+      onTitleUpdate?.(null);
     }
-    return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
-    };
-  }, [isRunning, secondsLeft, isMuted]);
+  }, [isRunning, secondsLeft, timerLabel, onTitleUpdate]);
 
   const handleStartPause = useCallback(() => {
     if (secondsLeft === 0) return;
-    setIsRunning((prev) => !prev);
+    soundEngine.playClick();
+    setIsRunning((prev) => {
+      const next = !prev;
+      if (next) {
+        endTimestampRef.current = Date.now() + secondsLeft * 1000;
+      } else {
+        endTimestampRef.current = null;
+      }
+      return next;
+    });
   }, [secondsLeft]);
 
   const handleReset = useCallback(() => {
+    soundEngine.playClick();
     setIsRunning(false);
+    endTimestampRef.current = null;
     setSecondsLeft(initialSeconds);
-  }, [initialSeconds]);
+    onTitleUpdate?.(null);
+  }, [initialSeconds, onTitleUpdate]);
 
-  const handlePreset = (seconds: number) => {
+  const handlePreset = (seconds: number, labelText?: string) => {
+    soundEngine.playClick();
     setIsRunning(false);
+    endTimestampRef.current = null;
     setInitialSeconds(seconds);
     setSecondsLeft(seconds);
+    if (labelText) setTimerLabel(labelText);
   };
 
   const handleCustomSubmit = (e: React.FormEvent) => {
@@ -94,6 +142,16 @@ export default function Timer({ externalSeconds, onClearExternalSeconds }: Timer
       setCustomMinutes('');
       setCustomSecs('');
     }
+  };
+
+  const copyShareableUrl = () => {
+    const url = new URL(window.location.href);
+    url.searchParams.set('tab', 'timer');
+    url.searchParams.set('duration', String(initialSeconds));
+    url.searchParams.set('label', timerLabel);
+    navigator.clipboard.writeText(url.toString());
+    setCopiedLink(true);
+    setTimeout(() => setCopiedLink(false), 2000);
   };
 
   useEffect(() => {
@@ -160,14 +218,18 @@ export default function Timer({ externalSeconds, onClearExternalSeconds }: Timer
                 strokeDasharray="298.45"
                 initial={{ strokeDashoffset: 298.45 }}
                 animate={{ strokeDashoffset: 298.45 - (298.45 * progress) / 100 }}
-                transition={{ duration: 0.5, ease: "linear" }}
+                transition={{ duration: 0.3, ease: "linear" }}
               />
             </svg>
 
-            <div className="relative z-10 flex flex-col items-center">
-              <span className="text-[9px] uppercase tracking-[0.4em] text-[#8A7348] font-semibold mb-3">
-                REMAINING RESERVOIR
-              </span>
+            <div className="relative z-10 flex flex-col items-center px-6 text-center">
+              <input
+                type="text"
+                value={timerLabel}
+                onChange={(e) => setTimerLabel(e.target.value)}
+                className="bg-transparent text-center text-[10px] uppercase tracking-[0.35em] text-[#C8A45D] font-semibold mb-3 border-b border-transparent hover:border-[#C8A45D]/40 focus:border-[#E5C687] focus:outline-none"
+                title="Click to edit timer label"
+              />
               <motion.span 
                 key={secondsLeft}
                 initial={{ scale: 0.98, opacity: 0.9 }}
@@ -177,7 +239,7 @@ export default function Timer({ externalSeconds, onClearExternalSeconds }: Timer
                 {formatTimer(secondsLeft)}
               </motion.span>
               <span className="mt-4 text-[10px] font-mono text-[#E5C687] uppercase tracking-[0.3em]">
-                {Math.round(100 - progress)}% REMAINING
+                {Math.round(100 - progress)}% RESERVOIR
               </span>
             </div>
           </div>
@@ -209,11 +271,12 @@ export default function Timer({ externalSeconds, onClearExternalSeconds }: Timer
 
           <motion.button
             whileTap={{ scale: 0.95 }}
-            onClick={() => setIsMuted(!isMuted)}
-            title={isMuted ? "Unmute Chime" : "Mute Chime"}
-            className="p-4 rounded-xl glass text-[#9E9587] hover:text-[#E5C687] transition-all cursor-pointer"
+            onClick={copyShareableUrl}
+            title="Copy deep-link URL to this exact timer"
+            className="px-4 py-4 rounded-xl glass text-[#E5C687] hover:border-[#C8A45D] transition-all cursor-pointer flex items-center space-x-2 text-[10px] font-mono uppercase tracking-wider"
           >
-            {isMuted ? <BellOff size={18} /> : <Bell size={18} className="text-[#C8A45D]" />}
+            {copiedLink ? <Check size={15} /> : <Share2 size={15} className="text-[#C8A45D]" />}
+            <span>{copiedLink ? 'LINK COPIED' : 'SHARE TIMER LINK'}</span>
           </motion.button>
         </div>
       </div>
@@ -234,7 +297,7 @@ export default function Timer({ externalSeconds, onClearExternalSeconds }: Timer
               return (
                 <button
                   key={preset.label}
-                  onClick={() => handlePreset(preset.seconds)}
+                  onClick={() => handlePreset(preset.seconds, `${preset.label} Timer`)}
                   className={cn(
                     "py-3.5 px-3 rounded-xl text-[11px] font-mono font-semibold uppercase tracking-[0.18em] transition-all border cursor-pointer",
                     active
@@ -251,8 +314,15 @@ export default function Timer({ externalSeconds, onClearExternalSeconds }: Timer
           {/* Custom Duration Input */}
           <form onSubmit={handleCustomSubmit} className="mt-6 pt-6 border-t border-[#C8A45D]/15 space-y-3">
             <label className="block text-[10px] uppercase tracking-[0.28em] text-[#8A7348] font-semibold">
-              Bespoke Duration
+              Bespoke Duration & Label
             </label>
+            <input
+              type="text"
+              placeholder="Session Label (e.g. Exam, Pitch, Meditation)"
+              value={timerLabel}
+              onChange={(e) => setTimerLabel(e.target.value)}
+              className="w-full bg-[#0A0908]/90 border border-[#C8A45D]/25 rounded-xl px-4 py-2.5 text-xs text-[#F4F1EA] placeholder-[#8A7348]/60 focus:outline-none focus:border-[#C8A45D]"
+            />
             <div className="flex items-center gap-3">
               <input
                 type="number"
