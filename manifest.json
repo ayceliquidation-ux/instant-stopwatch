@@ -1,0 +1,17 @@
+{
+  "name": "Stopwatch+ | Precision Timekeeping & Horology Suite",
+  "short_name": "Stopwatch+",
+  "description": "Zero-drift millisecond stopwatch, multi-timer countdowns, Pomodoro focus studio with procedural audio, and culinary command center.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0A0908",
+  "theme_color": "#C8A45D",
+  "icons": [
+    {
+      "src": "/emblem.jpg",
+      "sizes": "512x512",
+      "type": "image/jpeg",
+      "purpose": "any maskable"
+    }
+  ]
+}
