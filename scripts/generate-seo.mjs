@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 
-const BASE_URL = 'https://stopwatchplus.com';
+const BASE_URL = 'https://www.stopwatchplus.com';
 const LASTMOD = '2026-11-04';
 
 export const seoRoutes = [
@@ -533,13 +533,27 @@ fs.writeFileSync(path.resolve('public/sitemap.xml'), sitemapXml, 'utf8');
 const robotsTxt = `User-agent: *
 Allow: /
 
-Sitemap: ${BASE_URL}/sitemap.xml
+Sitemap: https://www.stopwatchplus.com/sitemap.xml
+Sitemap: https://stopwatchplus.com/sitemap.xml
 `;
 fs.writeFileSync(path.resolve('public/robots.txt'), robotsTxt, 'utf8');
 
-// 4. Write public/_redirects for Netlify SPA routing
+// 4. Write public/_redirects for Netlify SPA routing (no force override so static files like /sitemap.xml are served directly)
 const redirectsTxt = `/*    /index.html   200\n`;
 fs.writeFileSync(path.resolve('public/_redirects'), redirectsTxt, 'utf8');
+
+// 4b. Write public/_headers for explicit XML / plain-text Content-Type headers
+const headersTxt = `/sitemap.xml
+  Content-Type: application/xml; charset=utf-8
+  Cache-Control: public, max-age=3600
+
+/robots.txt
+  Content-Type: text/plain; charset=utf-8
+
+/ads.txt
+  Content-Type: text/plain; charset=utf-8
+`;
+fs.writeFileSync(path.resolve('public/_headers'), headersTxt, 'utf8');
 
 // 5. Write public/manifest.json for PWA installability
 const manifestJson = {

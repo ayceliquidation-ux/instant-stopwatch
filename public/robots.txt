@@ -1,4 +1,5 @@
 User-agent: *
 Allow: /
 
+Sitemap: https://www.stopwatchplus.com/sitemap.xml
 Sitemap: https://stopwatchplus.com/sitemap.xml
