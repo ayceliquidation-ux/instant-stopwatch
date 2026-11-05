@@ -1,16 +1,23 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { motion } from 'motion/react';
-import { RotateCcw, Coffee, Brain, Volume2, Plus, Trash2, CheckSquare, Square } from 'lucide-react';
+import { motion, AnimatePresence } from 'motion/react';
+import {
+  RotateCcw,
+  Coffee,
+  Brain,
+  Volume2,
+  Plus,
+  Trash2,
+  CheckSquare,
+  Square,
+  Sliders,
+  ArrowUp,
+  ArrowDown,
+  Flame,
+} from 'lucide-react';
 import { formatTimer, cn } from '../utils';
 import { soundEngine, AmbientProfile } from '../utils/soundEngine';
 
 type PomodoroMode = 'work' | 'shortBreak' | 'longBreak';
-
-const MODES: Record<PomodoroMode, { label: string; subtitle: string; seconds: number }> = {
-  work: { label: 'DEEP FOCUS', subtitle: '25 Minute Cognitive Immersion', seconds: 1500 },
-  shortBreak: { label: 'SHORT REST', subtitle: '5 Minute Decompression', seconds: 300 },
-  longBreak: { label: 'GRAND INTERMISSION', subtitle: '15 Minute Restoration', seconds: 900 },
-};
 
 interface FocusTask {
   id: string;
@@ -20,40 +27,112 @@ interface FocusTask {
   done: boolean;
 }
 
+interface DailyTelemetry {
+  date: string;
+  focusedMinutes: number;
+  completedSessions: number;
+  streakDays: number;
+}
+
 interface PomodoroProps {
   onTitleUpdate?: (title: string | null) => void;
 }
 
 export default function Pomodoro({ onTitleUpdate }: PomodoroProps) {
+  // Customizable Durations (in minutes)
+  const [focusMins, setFocusMins] = useState<number>(() => {
+    return Number(localStorage.getItem('pomo_focus_mins')) || 25;
+  });
+  const [shortBreakMins, setShortBreakMins] = useState<number>(() => {
+    return Number(localStorage.getItem('pomo_short_mins')) || 5;
+  });
+  const [longBreakMins, setLongBreakMins] = useState<number>(() => {
+    return Number(localStorage.getItem('pomo_long_mins')) || 15;
+  });
+  const [autoStartNext, setAutoStartNext] = useState<boolean>(() => {
+    return localStorage.getItem('pomo_autostart') === 'true';
+  });
+  const [showSettings, setShowSettings] = useState(false);
+
   const [mode, setMode] = useState<PomodoroMode>('work');
-  const [secondsLeft, setSecondsLeft] = useState(MODES.work.seconds);
+  const [secondsLeft, setSecondsLeft] = useState(focusMins * 60);
   const [isRunning, setIsRunning] = useState(false);
   const [sessions, setSessions] = useState<number>(() => {
     const saved = localStorage.getItem('pomodoro_sessions');
     return saved ? Number(saved) : 0;
   });
 
+  // Daily Focus Telemetry
+  const [telemetry, setTelemetry] = useState<DailyTelemetry>(() => {
+    const today = new Date().toISOString().slice(0, 10);
+    try {
+      const saved = localStorage.getItem('pomodoro_daily_telemetry');
+      if (saved) {
+        const parsed: DailyTelemetry = JSON.parse(saved);
+        if (parsed.date === today) return parsed;
+        return {
+          date: today,
+          focusedMinutes: 0,
+          completedSessions: 0,
+          streakDays: parsed.completedSessions > 0 ? parsed.streakDays + 1 : parsed.streakDays || 1,
+        };
+      }
+    } catch {}
+    return { date: today, focusedMinutes: 0, completedSessions: 0, streakDays: 1 };
+  });
+
   // Procedural Ambient Audio State
   const [ambient, setAmbient] = useState<AmbientProfile>('none');
   const [ambientVol, setAmbientVol] = useState<number>(0.35);
 
-  // Integrated Pomofocus-killer Task Queue
+  // Interactive Task Manager
   const [tasks, setTasks] = useState<FocusTask[]>(() => {
     try {
       const saved = localStorage.getItem('pomodoro_tasks');
       if (saved) return JSON.parse(saved);
     } catch {}
     return [
-      { id: 't1', title: 'Deep architecture & implementation review', estPomodoros: 2, completedPomodoros: 0, done: false },
+      { id: 't1', title: 'Deep architecture & implementation review', estPomodoros: 3, completedPomodoros: 0, done: false },
+      { id: 't2', title: 'Synthesize telemetry benchmarks & QA', estPomodoros: 2, completedPomodoros: 0, done: false },
     ];
   });
   const [newTaskTitle, setNewTaskTitle] = useState('');
+  const [newTaskEst, setNewTaskEst] = useState(1);
 
   const endTimestampRef = useRef<number | null>(null);
+
+  const modeConfig: Record<PomodoroMode, { label: string; subtitle: string; seconds: number }> = {
+    work: {
+      label: 'DEEP FOCUS',
+      subtitle: `${focusMins} Minute Cognitive Immersion`,
+      seconds: focusMins * 60,
+    },
+    shortBreak: {
+      label: 'SHORT REST',
+      subtitle: `${shortBreakMins} Minute Decompression`,
+      seconds: shortBreakMins * 60,
+    },
+    longBreak: {
+      label: 'GRAND INTERMISSION',
+      subtitle: `${longBreakMins} Minute Restoration`,
+      seconds: longBreakMins * 60,
+    },
+  };
+
+  useEffect(() => {
+    localStorage.setItem('pomo_focus_mins', String(focusMins));
+    localStorage.setItem('pomo_short_mins', String(shortBreakMins));
+    localStorage.setItem('pomo_long_mins', String(longBreakMins));
+    localStorage.setItem('pomo_autostart', String(autoStartNext));
+  }, [focusMins, shortBreakMins, longBreakMins, autoStartNext]);
 
   useEffect(() => {
     localStorage.setItem('pomodoro_sessions', String(sessions));
   }, [sessions]);
+
+  useEffect(() => {
+    localStorage.setItem('pomodoro_daily_telemetry', JSON.stringify(telemetry));
+  }, [telemetry]);
 
   useEffect(() => {
     localStorage.setItem('pomodoro_tasks', JSON.stringify(tasks));
@@ -85,13 +164,18 @@ export default function Pomodoro({ onTitleUpdate }: PomodoroProps) {
       }
 
       // Cycle Complete
-      setIsRunning(false);
-      endTimestampRef.current = null;
       soundEngine.playAlarm();
 
       if (mode === 'work') {
         const nextSessionCount = sessions + 1;
         setSessions(nextSessionCount);
+        setTelemetry((prev) => ({
+          ...prev,
+          focusedMinutes: prev.focusedMinutes + focusMins,
+          completedSessions: prev.completedSessions + 1,
+        }));
+
+        // Increment completedPomodoros on first active task
         setTasks((prev) => {
           const activeIdx = prev.findIndex((t) => !t.done);
           if (activeIdx === -1) return prev;
@@ -99,23 +183,42 @@ export default function Pomodoro({ onTitleUpdate }: PomodoroProps) {
             idx === activeIdx ? { ...t, completedPomodoros: t.completedPomodoros + 1 } : t
           );
         });
+
         const nextMode = nextSessionCount % 4 === 0 ? 'longBreak' : 'shortBreak';
+        const nextSecs = nextMode === 'longBreak' ? longBreakMins * 60 : shortBreakMins * 60;
         setMode(nextMode);
-        setSecondsLeft(MODES[nextMode].seconds);
-        soundEngine.notify('Focus Cycle Complete', `Time for ${MODES[nextMode].label}.`);
+        setSecondsLeft(nextSecs);
+        soundEngine.notify('Focus Cycle Complete', `Time for ${modeConfig[nextMode].label}.`);
+
+        if (autoStartNext) {
+          endTimestampRef.current = Date.now() + nextSecs * 1000;
+          setIsRunning(true);
+        } else {
+          endTimestampRef.current = null;
+          setIsRunning(false);
+        }
       } else {
+        const nextSecs = focusMins * 60;
         setMode('work');
-        setSecondsLeft(MODES.work.seconds);
-        soundEngine.notify('Break Complete', 'Ready for your next 25-minute Deep Focus session.');
+        setSecondsLeft(nextSecs);
+        soundEngine.notify('Break Complete', `Ready for your next ${focusMins}-minute Deep Focus session.`);
+
+        if (autoStartNext) {
+          endTimestampRef.current = Date.now() + nextSecs * 1000;
+          setIsRunning(true);
+        } else {
+          endTimestampRef.current = null;
+          setIsRunning(false);
+        }
       }
     }, 250);
 
     return () => clearInterval(interval);
-  }, [isRunning, mode, sessions, secondsLeft]);
+  }, [isRunning, mode, sessions, secondsLeft, focusMins, shortBreakMins, longBreakMins, autoStartNext]);
 
   useEffect(() => {
     if (isRunning) {
-      onTitleUpdate?.(`[${formatTimer(secondsLeft)}] ${MODES[mode].label} — Stopwatch+`);
+      onTitleUpdate?.(`[${formatTimer(secondsLeft)}] ${modeConfig[mode].label} — Stopwatch+`);
     } else {
       onTitleUpdate?.(null);
     }
@@ -138,16 +241,22 @@ export default function Pomodoro({ onTitleUpdate }: PomodoroProps) {
     soundEngine.playClick();
     setIsRunning(false);
     endTimestampRef.current = null;
-    setSecondsLeft(MODES[mode].seconds);
+    setSecondsLeft(modeConfig[mode].seconds);
     onTitleUpdate?.(null);
-  }, [mode, onTitleUpdate]);
+  }, [mode, focusMins, shortBreakMins, longBreakMins, onTitleUpdate]);
 
   const switchMode = (newMode: PomodoroMode) => {
     soundEngine.playClick();
     setIsRunning(false);
     endTimestampRef.current = null;
     setMode(newMode);
-    setSecondsLeft(MODES[newMode].seconds);
+    const secs =
+      newMode === 'work'
+        ? focusMins * 60
+        : newMode === 'shortBreak'
+        ? shortBreakMins * 60
+        : longBreakMins * 60;
+    setSecondsLeft(secs);
   };
 
   const handleAmbientChange = (prof: AmbientProfile) => {
@@ -163,16 +272,28 @@ export default function Pomodoro({ onTitleUpdate }: PomodoroProps) {
       {
         id: Math.random().toString(36).substring(2, 9),
         title: newTaskTitle.trim(),
-        estPomodoros: 1,
+        estPomodoros: Math.max(1, Math.min(12, newTaskEst)),
         completedPomodoros: 0,
         done: false,
       },
     ]);
     setNewTaskTitle('');
+    setNewTaskEst(1);
   };
 
   const toggleTask = (id: string) => {
     setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, done: !t.done } : t)));
+  };
+
+  const moveTask = (idx: number, dir: -1 | 1) => {
+    setTasks((prev) => {
+      const targetIdx = idx + dir;
+      if (targetIdx < 0 || targetIdx >= prev.length) return prev;
+      const copy = [...prev];
+      const [item] = copy.splice(idx, 1);
+      copy.splice(targetIdx, 0, item);
+      return copy;
+    });
   };
 
   const removeTask = (id: string) => {
@@ -199,7 +320,8 @@ export default function Pomodoro({ onTitleUpdate }: PomodoroProps) {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [handleStartPause, handleReset]);
 
-  const progress = ((MODES[mode].seconds - secondsLeft) / MODES[mode].seconds) * 100;
+  const totalSecForMode = modeConfig[mode].seconds;
+  const progress = totalSecForMode > 0 ? ((totalSecForMode - secondsLeft) / totalSecForMode) * 100 : 0;
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-12 gap-10 items-start w-full">
@@ -237,7 +359,7 @@ export default function Pomodoro({ onTitleUpdate }: PomodoroProps) {
                 {mode === 'work' ? <Brain size={22} /> : <Coffee size={22} />}
               </div>
               <span className="text-[9px] uppercase tracking-[0.35em] text-[#C8A45D] font-semibold mb-2">
-                {MODES[mode].label}
+                {modeConfig[mode].label}
               </span>
               <span className="text-5xl sm:text-6xl md:text-7xl font-mono font-light tracking-tight tabular-nums text-[#F4F1EA] gold-text-glow">
                 {formatTimer(secondsLeft)}
@@ -267,7 +389,7 @@ export default function Pomodoro({ onTitleUpdate }: PomodoroProps) {
         </div>
 
         {/* Chamfered Controls */}
-        <div className="flex flex-wrap items-center justify-center lg:justify-start gap-4">
+        <div className="flex flex-wrap items-center justify-center lg:justify-start gap-3.5">
           <motion.button
             whileTap={{ scale: 0.97 }}
             onClick={handleStartPause}
@@ -282,12 +404,103 @@ export default function Pomodoro({ onTitleUpdate }: PomodoroProps) {
           <motion.button
             whileTap={{ scale: 0.95 }}
             onClick={handleReset}
-            className="btn-chamfer px-6 py-4 flex items-center space-x-2.5 cursor-pointer text-[#E5C687]"
+            className="btn-chamfer px-5 py-4 flex items-center space-x-2 cursor-pointer text-[#E5C687]"
           >
             <RotateCcw size={15} className="text-[#C8A45D]" />
             <span className="text-xs font-semibold uppercase tracking-[0.2em]">RESET</span>
           </motion.button>
+
+          <button
+            onClick={() => setShowSettings(!showSettings)}
+            className={cn(
+              "p-4 rounded-xl border transition-all cursor-pointer",
+              showSettings
+                ? "bg-[#C8A45D] text-[#0A0908] border-[#E5C687]"
+                : "glass border-[#C8A45D]/20 text-[#E5C687]"
+            )}
+            title="Customize Focus & Break Durations"
+          >
+            <Sliders size={16} />
+          </button>
         </div>
+
+        {/* Customizable Durations & Auto-Start Drawer */}
+        <AnimatePresence>
+          {showSettings && (
+            <motion.div
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: 'auto' }}
+              exit={{ opacity: 0, height: 0 }}
+              className="w-full glass rounded-2xl p-5 border border-[#C8A45D]/30 space-y-4 overflow-hidden"
+            >
+              <div className="flex items-center justify-between border-b border-[#C8A45D]/15 pb-2.5">
+                <span className="text-[10px] font-mono uppercase tracking-[0.25em] text-[#E5C687]">
+                  CADENCE CALIBRATION (MINUTES)
+                </span>
+                <button
+                  onClick={() => setAutoStartNext(!autoStartNext)}
+                  className="text-[10px] font-mono uppercase text-[#C8A45D] cursor-pointer"
+                >
+                  AUTO-START NEXT PHASE: {autoStartNext ? '◆ ON' : '◇ OFF'}
+                </button>
+              </div>
+
+              <div className="grid grid-cols-3 gap-3">
+                <div>
+                  <label className="text-[10px] uppercase tracking-wider text-[#8A7348] block mb-1">
+                    Focus (15–90m)
+                  </label>
+                  <input
+                    type="number"
+                    min={15}
+                    max={90}
+                    value={focusMins}
+                    onChange={(e) => {
+                      const v = Math.max(1, Math.min(90, Number(e.target.value)));
+                      setFocusMins(v);
+                      if (mode === 'work' && !isRunning) setSecondsLeft(v * 60);
+                    }}
+                    className="w-full bg-[#0A0908] border border-[#C8A45D]/25 rounded-xl p-2.5 text-xs font-mono text-[#F4F1EA]"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] uppercase tracking-wider text-[#8A7348] block mb-1">
+                    Short (3–15m)
+                  </label>
+                  <input
+                    type="number"
+                    min={3}
+                    max={15}
+                    value={shortBreakMins}
+                    onChange={(e) => {
+                      const v = Math.max(1, Math.min(15, Number(e.target.value)));
+                      setShortBreakMins(v);
+                      if (mode === 'shortBreak' && !isRunning) setSecondsLeft(v * 60);
+                    }}
+                    className="w-full bg-[#0A0908] border border-[#C8A45D]/25 rounded-xl p-2.5 text-xs font-mono text-[#F4F1EA]"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] uppercase tracking-wider text-[#8A7348] block mb-1">
+                    Long (15–45m)
+                  </label>
+                  <input
+                    type="number"
+                    min={15}
+                    max={45}
+                    value={longBreakMins}
+                    onChange={(e) => {
+                      const v = Math.max(5, Math.min(45, Number(e.target.value)));
+                      setLongBreakMins(v);
+                      if (mode === 'longBreak' && !isRunning) setSecondsLeft(v * 60);
+                    }}
+                    className="w-full bg-[#0A0908] border border-[#C8A45D]/25 rounded-xl p-2.5 text-xs font-mono text-[#F4F1EA]"
+                  />
+                </div>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
 
         {/* Procedural Web Audio Focus Soundscape Mixer */}
         <div className="w-full glass rounded-2xl p-5 border border-[#C8A45D]/20 space-y-4">
@@ -298,20 +511,25 @@ export default function Pomodoro({ onTitleUpdate }: PomodoroProps) {
                 PROCEDURAL FOCUS SOUNDSCAPE SYNTHESIZER
               </span>
             </div>
-            <input
-              type="range"
-              min={0}
-              max={1}
-              step={0.05}
-              value={ambientVol}
-              onChange={(e) => {
-                const v = Number(e.target.value);
-                setAmbientVol(v);
-                soundEngine.setAmbient(ambient, v);
-              }}
-              className="w-24 accent-[#C8A45D] cursor-pointer"
-              title="Ambient Volume"
-            />
+            <div className="flex items-center space-x-2">
+              <span className="text-[10px] font-mono text-[#8A7348]">
+                {Math.round(ambientVol * 100)}%
+              </span>
+              <input
+                type="range"
+                min={0}
+                max={1}
+                step={0.05}
+                value={ambientVol}
+                onChange={(e) => {
+                  const v = Number(e.target.value);
+                  setAmbientVol(v);
+                  soundEngine.setAmbient(ambient, v);
+                }}
+                className="w-24 accent-[#C8A45D] cursor-pointer"
+                title="Ambient Volume"
+              />
+            </div>
           </div>
 
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
@@ -338,8 +556,38 @@ export default function Pomodoro({ onTitleUpdate }: PomodoroProps) {
         </div>
       </div>
 
-      {/* Right Column: Cadence Selector & Focus Task Queue */}
+      {/* Right Column: Daily Focus Telemetry, Cadence Selector & Interactive Task Manager */}
       <div className="lg:col-span-6 w-full space-y-6">
+        {/* Daily Focus Telemetry Strip */}
+        <div className="grid grid-cols-3 gap-3">
+          <div className="glass rounded-xl p-4 border border-[#C8A45D]/20">
+            <span className="text-[9px] font-mono uppercase tracking-[0.22em] text-[#8A7348] block">
+              FOCUSED TODAY
+            </span>
+            <span className="text-xl font-mono text-[#E5C687] mt-1 block">
+              {telemetry.focusedMinutes}m
+            </span>
+          </div>
+          <div className="glass rounded-xl p-4 border border-[#C8A45D]/20">
+            <span className="text-[9px] font-mono uppercase tracking-[0.22em] text-[#8A7348] block">
+              SESSIONS TODAY
+            </span>
+            <span className="text-xl font-mono text-[#F4F1EA] mt-1 block">
+              {telemetry.completedSessions} ◆
+            </span>
+          </div>
+          <div className="glass rounded-xl p-4 border border-[#C8A45D]/20">
+            <span className="text-[9px] font-mono uppercase tracking-[0.22em] text-[#8A7348] block">
+              DAILY STREAK
+            </span>
+            <span className="text-xl font-mono text-amber-300 mt-1 flex items-center space-x-1">
+              <Flame size={16} className="text-[#C8A45D]" />
+              <span>{telemetry.streakDays}d</span>
+            </span>
+          </div>
+        </div>
+
+        {/* Cadence Selector */}
         <div className="glass rounded-2xl p-6 neo-shadow border border-[#C8A45D]/20 space-y-4">
           <div className="flex items-center justify-between pb-3 border-b border-[#C8A45D]/15">
             <div className="flex items-center space-x-2">
@@ -349,12 +597,12 @@ export default function Pomodoro({ onTitleUpdate }: PomodoroProps) {
               </h3>
             </div>
             <span className="text-[10px] font-mono uppercase tracking-[0.25em] text-[#E5C687]">
-              {sessions} POMODOROS COMPLETED
+              {sessions} TOTAL POMODOROS
             </span>
           </div>
 
           <div className="grid grid-cols-3 gap-2.5">
-            {(Object.keys(MODES) as PomodoroMode[]).map((m) => {
+            {(Object.keys(modeConfig) as PomodoroMode[]).map((m) => {
               const active = mode === m;
               return (
                 <button
@@ -368,10 +616,10 @@ export default function Pomodoro({ onTitleUpdate }: PomodoroProps) {
                   )}
                 >
                   <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[#E5C687]">
-                    {MODES[m].label}
+                    {modeConfig[m].label}
                   </div>
                   <div className="font-mono text-sm text-[#F4F1EA] mt-1">
-                    {Math.floor(MODES[m].seconds / 60)}:00
+                    {Math.floor(modeConfig[m].seconds / 60)}:00
                   </div>
                 </button>
               );
@@ -379,13 +627,13 @@ export default function Pomodoro({ onTitleUpdate }: PomodoroProps) {
           </div>
         </div>
 
-        {/* Executive Focus Ledger (Tasks) */}
+        {/* Interactive Executive Task Manager */}
         <div className="glass rounded-2xl p-6 neo-shadow border border-[#C8A45D]/20 space-y-4">
           <div className="flex items-center justify-between pb-3 border-b border-[#C8A45D]/15">
             <div className="flex items-center space-x-2">
               <span className="text-[#C8A45D] text-xs">◆</span>
               <h3 className="font-editorial text-xl text-[#F4F1EA] tracking-wide">
-                Executive Focus Ledger
+                Executive Focus Task Queue
               </h3>
             </div>
             <span className="text-[10px] font-mono uppercase tracking-[0.2em] text-[#8A7348]">
@@ -393,7 +641,7 @@ export default function Pomodoro({ onTitleUpdate }: PomodoroProps) {
             </span>
           </div>
 
-          <form onSubmit={addTask} className="flex gap-2">
+          <form onSubmit={addTask} className="flex flex-wrap sm:flex-nowrap gap-2">
             <input
               type="text"
               value={newTaskTitle}
@@ -401,6 +649,18 @@ export default function Pomodoro({ onTitleUpdate }: PomodoroProps) {
               placeholder="Inscribe focus objective..."
               className="flex-1 bg-[#0A0908] border border-[#C8A45D]/25 rounded-xl px-4 py-2.5 text-xs text-[#F4F1EA] placeholder-[#8A7348]/60 focus:outline-none focus:border-[#C8A45D]"
             />
+            <div className="flex items-center space-x-1.5 bg-[#0A0908] border border-[#C8A45D]/25 rounded-xl px-3 py-2">
+              <span className="text-[10px] font-mono text-[#8A7348]">EST ◆</span>
+              <input
+                type="number"
+                min={1}
+                max={12}
+                value={newTaskEst}
+                onChange={(e) => setNewTaskEst(Number(e.target.value))}
+                className="w-10 bg-transparent text-xs font-mono text-[#E5C687] text-center focus:outline-none"
+                title="Estimated Pomodoros"
+              />
+            </div>
             <button
               type="submit"
               className="btn-chamfer px-4 py-2.5 text-[10px] font-semibold uppercase tracking-wider text-[#E5C687] flex items-center space-x-1 cursor-pointer"
@@ -410,8 +670,8 @@ export default function Pomodoro({ onTitleUpdate }: PomodoroProps) {
             </button>
           </form>
 
-          <div className="space-y-2 max-h-52 overflow-y-auto custom-scrollbar pr-1">
-            {tasks.map((t) => (
+          <div className="space-y-2 max-h-60 overflow-y-auto custom-scrollbar pr-1">
+            {tasks.map((t, idx) => (
               <div
                 key={t.id}
                 className="flex items-center justify-between p-3 rounded-xl bg-[#12100E]/80 border border-[#C8A45D]/15"
@@ -434,13 +694,30 @@ export default function Pomodoro({ onTitleUpdate }: PomodoroProps) {
                     {t.title}
                   </span>
                 </button>
-                <div className="flex items-center space-x-3 ml-2 shrink-0">
-                  <span className="text-[10px] font-mono text-[#E5C687]">
+                <div className="flex items-center space-x-2 ml-2 shrink-0">
+                  <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-[#C8A45D]/10 text-[#E5C687]">
                     {t.completedPomodoros}/{t.estPomodoros} ◆
                   </span>
                   <button
+                    onClick={() => moveTask(idx, -1)}
+                    disabled={idx === 0}
+                    className="text-[#8A7348] hover:text-[#E5C687] disabled:opacity-25 cursor-pointer"
+                    title="Move Up"
+                  >
+                    <ArrowUp size={13} />
+                  </button>
+                  <button
+                    onClick={() => moveTask(idx, 1)}
+                    disabled={idx === tasks.length - 1}
+                    className="text-[#8A7348] hover:text-[#E5C687] disabled:opacity-25 cursor-pointer"
+                    title="Move Down"
+                  >
+                    <ArrowDown size={13} />
+                  </button>
+                  <button
                     onClick={() => removeTask(t.id)}
                     className="text-[#8A7348] hover:text-red-400 cursor-pointer"
+                    title="Delete Task"
                   >
                     <Trash2 size={13} />
                   </button>
